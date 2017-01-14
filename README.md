@@ -1,2 +1,2 @@
 # rethinkdb
-RethinkDB driver
+[RethinkDB](https://rethinkdb.com) driver
