@@ -4,8 +4,9 @@ import rethinkdb
 let c = waitFor newConnection("localhost")
 
 proc test() {.async.} =
-    echo "create: ", await c.runQuery(db("test").tableCreate("yoyoyo"))
-    echo "drop: ", await c.runQuery(db("test").tableDrop("yoyoyo"))
+    echo "create: ", await c.runQuery(db("test").tableCreate("hello"))
+    echo "drop: ", await c.runQuery(db("test").tableDrop("hello"))
+    echo "create again: ", await c.runQuery(db("test").tableCreate("hello"))
 
     echo "tableList: ", await c.runQuery(db("test").tableList())
 
