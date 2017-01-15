@@ -95,21 +95,12 @@ proc checkSuccess(j: JsonNode) =
     if not s.isNil and s.kind == JBool and s.bval: return
     raise newException(Exception, "Authentication error")
 
-proc authenticate(s: AsyncSocket, username, password: string) {.async.} =
+proc scram_first_message_bare(username: string): string =
     let rand = random.random(1.0)
     let nonce = base64.encode(($rand)[2..^1])
-    let fb = "n=" & username & ",r=" & nonce
-    await s.writeJson(%*{
-        "protocol_version": 0,
-        "authentication_method": "SCRAM-SHA-256",
-        "authentication": "n,," & fb
-    })
+    result = "n=" & username & ",r=" & nonce
 
-    let j = await s.readJson()
-    checkSuccess(j)
-
-    let responsePayload = j["authentication"].str
-
+proc scram_final_sha256(first_message_bare, responsePayload, password: string): string =
     proc parsePayload(p: string): Table[string, string] =
         result = initTable[string, string]()
         for item in p.split(","):
@@ -118,7 +109,7 @@ proc authenticate(s: AsyncSocket, username, password: string) {.async.} =
             let val = item[e + 1..^1]
             result[key] = val
 
-    let parsedPayload = parsePayload(j["authentication"].str)
+    let parsedPayload = parsePayload(responsePayload)
 
     let iterations = parseInt(parsedPayload["i"])
     let salt = base64.decode(parsedPayload["s"])
@@ -140,14 +131,27 @@ proc authenticate(s: AsyncSocket, username, password: string) {.async.} =
     let client_key = stringWithSHA256Digest(hmac_sha256(saltedPass, "Client Key"))
     let stored_key = stringWithSHA256Digest(computeSHA256(client_key))
 
-    let auth_msg = join([fb, responsePayload, withoutProof], ",")
+    let auth_msg = join([first_message_bare, responsePayload, withoutProof], ",")
 
     let client_sig = stringWithSHA256Digest(hmac_sha256(stored_key, auth_msg))
 
     let toEncode = xorBytes(client_key, client_sig)
 
     let client_proof = "p=" & base64.encode(toEncode)
-    let client_final = join([without_proof, client_proof], ",")
+    result = join([without_proof, client_proof], ",")
+
+proc authenticate(s: AsyncSocket, username, password: string) {.async.} =
+    let fb = scram_first_message_bare(username)
+    await s.writeJson(%*{
+        "protocol_version": 0,
+        "authentication_method": "SCRAM-SHA-256",
+        "authentication": "n,," & fb
+    })
+
+    let j = await s.readJson()
+    checkSuccess(j)
+
+    let client_final = scram_final_sha256(fb, j["authentication"].str, password)
 
     await s.writeJson(%*{
         "authentication": client_final
