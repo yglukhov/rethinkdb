@@ -51,11 +51,11 @@ proc concurentTest3() {.async.} =
         doAssert(j["deleted"].num == 1)
 
 proc main() =
+    defer: waitFor tearDown()
     waitFor setUp()
     waitFor all(
         concurentTest1(10), concurentTest2(), concurentTest1(30),
         concurentTest2(), concurentTest1(50), concurentTest3(),
         concurentTest1(1000), concurentTest3(), concurentTest2())
-    waitFor tearDown()
 
 main()

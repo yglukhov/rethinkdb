@@ -15,7 +15,7 @@ type
     TableNode* = JsonNode
     SequenceNode* = JsonNode
     FunctionNode* = JsonNode
-    ExpressionNode* = JsonNode
+    ExpressionNode* = distinct JsonNode
 
     Command {.pure.} = enum
         start = 1
@@ -70,12 +70,10 @@ type
         RUNTIME_ERROR = 18
 
 
-
-
 proc readUntil(s: AsyncSocket, terminator: char): Future[string] {.async.} =
     result = ""
-    var c = '\0'
     while true:
+        var c: char
         discard await s.recvInto(addr c, sizeof(c))
         if c == terminator: break
         result &= c
@@ -91,9 +89,8 @@ proc writeJson(s: AsyncSocket, j: JsonNode) {.async.} =
     GC_unref(str)
 
 proc checkSuccess(j: JsonNode) =
-    let s = j{"success"}
-    if not s.isNil and s.kind == JBool and s.bval: return
-    raise newException(Exception, "Authentication error")
+    if not j{"success"}.getBVal():
+        raise newException(Exception, "Authentication error")
 
 proc scram_first_message_bare(username: string): string =
     let rand = random.random(1.0)
@@ -156,8 +153,7 @@ proc authenticate(s: AsyncSocket, username, password: string) {.async.} =
     await s.writeJson(%*{
         "authentication": client_final
     })
-    let jj = await s.readJson()
-    checkSuccess(jj)
+    checkSuccess(await s.readJson())
 
 proc readResponse(c: Connection) {.async.} =
     var idBuf = await c.sock.recv(8)
@@ -184,7 +180,7 @@ proc readResponse(c: Connection) {.async.} =
 
 proc wrapInStart(q: QueryNode): QueryNode = %[%Command.start.int, q]
 
-proc runQuery*(c: Connection, q: QueryNode): Future[JsonNode] =
+proc runQueryImpl(c: Connection, q: JsonNode): Future[JsonNode] =
     inc c.queryIdCounter
     var id = c.queryIdCounter
     var serialized = $wrapInStart(q)
@@ -200,13 +196,15 @@ proc runQuery*(c: Connection, q: QueryNode): Future[JsonNode] =
     if c.pendingQueries.len == 1:
         asyncCheck c.readResponse()
 
+template runQuery*(c: Connection, q: QueryNode | ExpressionNode): Future[JsonNode] =
+    runQueryImpl(c, JsonNode(q))
+
 proc newConnection*(host: string, username: string = "admin", password: string = ""): Future[Connection] {.async.} =
     let s = newAsyncSocket()
     await s.connect(host, Port(28015))
     var header = 0x34c2bdc3'u32
     await s.send(addr header, sizeof(header))
-    let j = await s.readJson()
-    checkSuccess(j)
+    checkSuccess(await s.readJson())
     await s.authenticate(username, password)
     result.new()
     result.sock = s
@@ -218,13 +216,14 @@ proc close*(c: Connection) {.async.} =
 ################################################################################
 # Commands
 
-proc cmd(c: Command, args: varargs[JsonNode]): JsonNode = %[%c.int, %args]
+template cmd(c: Command, args: varargs[JsonNode]): JsonNode = %[%c.int, %args]
+template ecmd(c: Command, args: varargs[JsonNode]): ExpressionNode = cmd(c, args).ExpressionNode
 
 template wrapArray(content: JsonNode): JsonNode = %[%Command.makeArray.int, content]
 
 
 template wrapFunc(body: ExpressionNode): FunctionNode =
-    cmd(Command.FUNC, wrapArray(%[58]), body) # What does 58 mean???
+    cmd(Command.FUNC, wrapArray(%[58]), body.JsonNode) # What does 58 mean???
 
 
 template db*(name: string): DBNode = cmd(Command.db, %name)
@@ -253,10 +252,14 @@ template tableDrop*(theDB: DBNode, name: string): QueryNode = cmd(Command.tableD
 template tableList*(theDB: DBNode): QueryNode = cmd(Command.tableList, theDB)
 
 template row*(name: string): ExpressionNode =
-    cmd(Command.BRACKET, cmd(Command.IMPLICIT_VAR), %name)
+    ecmd(Command.BRACKET, cmd(Command.IMPLICIT_VAR), %name)
 
 proc exprIsOp(e: ExpressionNode, c: Command): bool =
+    let e = e.JsonNode
     e.kind == JArray and e.len > 0 and e[0].num == c.int
+
+template binOp(c: Command, a, b: ExpressionNode): ExpressionNode =
+    ecmd(c, a.JsonNode, b.JsonNode)
 
 template chainOp(c: Command, a, b: ExpressionNode): ExpressionNode =
     # result = newJArray()
@@ -265,29 +268,33 @@ template chainOp(c: Command, a, b: ExpressionNode): ExpressionNode =
     # if exprIsOp(a, c):
     #     if exprIsOp(b, c):
     #         for a in a[0]
-    cmd(c, a, b)
+    binOp(c, a, b)
 
 template `or`*(a, b: ExpressionNode): ExpressionNode =
-    chainOp(Command.OR, a, b)
+    chainOp(Command.OR, a, b).ExpressionNode
 
 template `and`*(a, b: ExpressionNode): ExpressionNode =
-    chainOp(Command.AND, a, b)
+    chainOp(Command.AND, a, b).ExpressionNode
 
-template newExpr*(s: string | int | float): ExpressionNode = %s
+template newExpr*(s: string | int | float): ExpressionNode = ExpressionNode(%s)
 
-template `==`*(n: ExpressionNode, s: string): ExpressionNode =
-    cmd(Command.EQ, n, %s)
+template `==`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.EQ, a, b)
+template `!=`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.NE, a, b)
 
-template `>`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.GT, a, b)
-template `<`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.LT, a, b)
-template `>=`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.GE, a, b)
-template `<=`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.LE, a, b)
+template `>`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.GT, a, b)
+template `<`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.LT, a, b)
+template `>=`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.GE, a, b)
+template `<=`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.LE, a, b)
 
-template `+`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.ADD, a, b)
-template `-`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.SUB, a, b)
-template `*`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.MUL, a, b)
-template `/`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.DIV, a, b)
-template `mod`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.MOD, a, b)
+template `+`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.ADD, a, b)
+template `-`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.SUB, a, b)
+template `*`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.MUL, a, b)
+template `/`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.DIV, a, b)
+template `mod`*(a, b: ExpressionNode): ExpressionNode = binOp(Command.MOD, a, b)
 
-template `>`*(a: ExpressionNode, b: int): ExpressionNode = a > %b
-template `<`*(a: ExpressionNode, b: int): ExpressionNode = a < %b
+template `not`*(a: ExpressionNode): ExpressionNode = ecmd(Command.NOT, a.JsonNode)
+
+template `>`*(a: ExpressionNode, b: int): ExpressionNode = a > newExpr(b)
+template `<`*(a: ExpressionNode, b: int): ExpressionNode = a < newExpr(b)
+
+template `==`*(n: ExpressionNode, s: string): ExpressionNode = n == newExpr(s)
