@@ -3,7 +3,7 @@ import rethinkdb
 
 let c = waitFor newConnection("localhost")
 
-proc test() {.async.} =
+proc setUp() {.async.} =
     echo "create: ", await c.runQuery(db("test").tableCreate("hello"))
     echo "drop: ", await c.runQuery(db("test").tableDrop("hello"))
     echo "create again: ", await c.runQuery(db("test").tableCreate("hello"))
@@ -21,8 +21,10 @@ proc test() {.async.} =
     echo "delete: ", await c.runQuery(t.filter(row("qwer") == "adf").delete())
     echo "delete: ", await c.runQuery(t.filter(row("qwer1") == "asdf1").delete())
 
-    #echo "insert: ", await c.runQuery(t.insert(%*[{"qwer": "adf"}, {"qwer1": "asdf1"}]))
-    echo "pluck: ", await c.runQuery t.filter(row("a") > 5 and row("a") < 16).pluck("id")
+
+proc tearDown() {.async.} =
+    echo "drop: ", await c.runQuery(db("test").tableDrop("hello"))
+    await c.close()
 
 proc concurentTest1(seed: int) {.async.} =
     for i in 0 .. 50:
@@ -49,10 +51,11 @@ proc concurentTest3() {.async.} =
         doAssert(j["deleted"].num == 1)
 
 proc main() =
-    waitFor test()
+    waitFor setUp()
     waitFor all(
         concurentTest1(10), concurentTest2(), concurentTest1(30),
         concurentTest2(), concurentTest1(50), concurentTest3(),
         concurentTest1(1000), concurentTest3(), concurentTest2())
+    waitFor tearDown()
 
 main()

@@ -178,11 +178,7 @@ proc readResponse(c: Connection) {.async.} =
         raise newException(Exception, "Bad response")
     f.complete(j)
 
-proc wrapInStart(q: QueryNode): QueryNode =
-    result = newJArray()
-    result.add(%Command.start.int)
-    result.add(q)
-    #result.add(newJObject())
+proc wrapInStart(q: QueryNode): QueryNode = %[%Command.start.int, q]
 
 proc runQuery*(c: Connection, q: QueryNode): Future[JsonNode] =
     inc c.queryIdCounter
@@ -206,10 +202,14 @@ proc newConnection*(host: string, username: string = "admin", password: string =
     var header = 0x34c2bdc3'u32
     await s.send(addr header, sizeof(header))
     let j = await s.readJson()
+    checkSuccess(j)
     await s.authenticate(username, password)
     result.new()
     result.sock = s
     result.pendingQueries = initTable[int64, Future[JsonNode]]()
+
+proc close*(c: Connection) {.async.} =
+    c.sock.close()
 
 ################################################################################
 # Commands
@@ -274,22 +274,16 @@ template newExpr*(s: string | int | float): ExpressionNode = %s
 template `==`*(n: ExpressionNode, s: string): ExpressionNode =
     cmd(Command.EQ, n, %s)
 
-template `>`*(a: ExpressionNode, b: int): ExpressionNode = cmd(Command.GT, a, %b)
-template `<`*(a: ExpressionNode, b: int): ExpressionNode = cmd(Command.LT, a, %b)
+template `>`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.GT, a, b)
+template `<`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.LT, a, b)
+template `>=`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.GE, a, b)
+template `<=`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.LE, a, b)
 
+template `+`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.ADD, a, b)
+template `-`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.SUB, a, b)
+template `*`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.MUL, a, b)
+template `/`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.DIV, a, b)
+template `mod`*(a, b: ExpressionNode): ExpressionNode = cmd(Command.MOD, a, b)
 
-template `+`*(a: ExpressionNode, b: ExpressionNode): ExpressionNode = cmd(Command.ADD, a, %b)
-
-
-    # [
-    #                     170, // BRACKET
-    #                     [
-    #                        [
-    #                           13, // IMPLICIT_VAR
-    #                           [
-
-    #                           ]
-    #                        ],
-    #                        "1"
-    #                     ]
-    #                  ]
+template `>`*(a: ExpressionNode, b: int): ExpressionNode = a > %b
+template `<`*(a: ExpressionNode, b: int): ExpressionNode = a < %b
