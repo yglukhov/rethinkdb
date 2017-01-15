@@ -1,5 +1,6 @@
 set -e
 
+echo "deb http://ftp.debian.org/debian unstable main contrib non-free" | tee /etc/apt/sources.list.d/unstable.list
 apt-get update
 apt-get install -y lsb-release wget gnupg
 echo "deb http://download.rethinkdb.com/apt `lsb_release -cs` main" | tee /etc/apt/sources.list.d/rethinkdb.list
