@@ -13,6 +13,7 @@ proc test() {.async.} =
     let t = db("test").table("hello")
     echo "table: ", await c.runQuery(t)
     echo "insert: ", await c.runQuery(t.insert(%*[{"qwer": "adf"}, {"qwer1": "asdf1"}]))
+    echo "insert: ", await c.runQuery(t.insert(%*[{"a": 5}, {"a": 10}, {"a": 15}]))
     echo "table: ", await c.runQuery(t)
 
     echo "filter: ", await c.runQuery(t.filter(row("qwer") == "adf"))
