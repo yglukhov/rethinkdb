@@ -42,12 +42,14 @@ type
         DIV = 27
         MOD = 28
 
-        PLUCK    = 33
+        PLUCK = 33
+        WITHOUT = 34
 
         filter = 39
 
+        UPDATE = 53
         DELETE = 54
-        insert = 56
+        INSERT = 56
 
         tableCreate = 60
         tableDrop = 61
@@ -199,9 +201,9 @@ proc runQueryImpl(c: Connection, q: JsonNode): Future[JsonNode] =
 template runQuery*(c: Connection, q: QueryNode | ExpressionNode): Future[JsonNode] =
     runQueryImpl(c, JsonNode(q))
 
-proc newConnection*(host: string, username: string = "admin", password: string = ""): Future[Connection] {.async.} =
+proc newConnection*(host = "localhost", username = "admin", password = "", port = 28015): Future[Connection] {.async.} =
     let s = newAsyncSocket()
-    await s.connect(host, Port(28015))
+    await s.connect(host, Port(port))
     var header = 0x34c2bdc3'u32
     await s.send(addr header, sizeof(header))
     checkSuccess(await s.readJson())
@@ -230,22 +232,26 @@ template db*(name: string): DBNode = cmd(Command.db, %name)
 template table*(theDB: DBNode, name: string): TableNode = cmd(Command.table, theDB, %name)
 template get*(table: TableNode, name: string): JsonNode = cmd(Command.GET, table, %name)
 
-proc pluck*(s: SequenceNode, args: varargs[string]): SequenceNode =
-    result = %[%Command.PLUCK.int]
+proc pluckOrWithoutCmd(c: Command, s: SequenceNode, args: varargs[string]): SequenceNode =
+    result = %[%c.int]
     let jArgs = %[s]
     for a in args: jArgs.add(%a)
     result.add(jArgs)
 
+template pluck*(s: SequenceNode, args: varargs[string]): SequenceNode = pluckOrWithoutCmd(Command.PLUCK, s, args)
+template `without`*(s: SequenceNode, args: varargs[string]): SequenceNode = pluckOrWithoutCmd(Command.WITHOUT, s, args)
+template excludeFields*(s: SequenceNode, args: varargs[string]): SequenceNode = `without`(s, args)
+
 template filter*(sequence: TableNode | SequenceNode, predicate: ExpressionNode): SequenceNode =
     cmd(Command.filter, sequence, wrapFunc(predicate))
 
-template delete*(sequence: SequenceNode): QueryNode =
-    cmd(Command.DELETE, sequence)
+template update*(sequence: SequenceNode, o: JsonNode): QueryNode = cmd(Command.UPDATE, sequence, o)
+template delete*(sequence: SequenceNode): QueryNode = cmd(Command.DELETE, sequence)
 
 proc insert*(tab: TableNode, data: JsonNode): QueryNode =
     var data = data
     if data.kind == JArray: data = wrapArray(data)
-    cmd(Command.insert, tab, data)
+    cmd(Command.INSERT, tab, data)
 
 template tableCreate*(theDB: DBNode, name: string): QueryNode = cmd(Command.tableCreate, theDB, %name)
 template tableDrop*(theDB: DBNode, name: string): QueryNode = cmd(Command.tableDrop, theDB, %name)
@@ -258,8 +264,7 @@ proc exprIsOp(e: ExpressionNode, c: Command): bool =
     let e = e.JsonNode
     e.kind == JArray and e.len > 0 and e[0].num == c.int
 
-template binOp(c: Command, a, b: ExpressionNode): ExpressionNode =
-    ecmd(c, a.JsonNode, b.JsonNode)
+template binOp(c: Command, a, b: ExpressionNode): ExpressionNode = ecmd(c, a.JsonNode, b.JsonNode)
 
 template chainOp(c: Command, a, b: ExpressionNode): ExpressionNode =
     # result = newJArray()
@@ -270,11 +275,8 @@ template chainOp(c: Command, a, b: ExpressionNode): ExpressionNode =
     #         for a in a[0]
     binOp(c, a, b)
 
-template `or`*(a, b: ExpressionNode): ExpressionNode =
-    chainOp(Command.OR, a, b).ExpressionNode
-
-template `and`*(a, b: ExpressionNode): ExpressionNode =
-    chainOp(Command.AND, a, b).ExpressionNode
+template `or`*(a, b: ExpressionNode): ExpressionNode = chainOp(Command.OR, a, b)
+template `and`*(a, b: ExpressionNode): ExpressionNode = chainOp(Command.AND, a, b)
 
 template newExpr*(s: string | int | float): ExpressionNode = ExpressionNode(%s)
 
