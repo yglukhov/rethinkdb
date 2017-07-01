@@ -1,7 +1,8 @@
 import asyncdispatch, asyncnet, json, random, base64, tables, strutils, md5
 
 import nimSHA2
-import sha1, hmac
+import sha1
+import hmac except `%`
 import rethinkdb.private.pbkdf2
 
 type
