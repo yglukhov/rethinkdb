@@ -1,9 +1,5 @@
-import asyncdispatch, asyncnet, json, random, base64, tables, strutils, md5
-
-import nimSHA2
-import sha1
-import hmac except `%`
-import rethinkdb.private.pbkdf2
+import asyncdispatch, asyncnet, json, tables
+import scram/client
 
 type
     Connection* = ref object
@@ -95,66 +91,22 @@ proc checkSuccess(j: JsonNode) =
     if not j{"success"}.getBVal():
         raise newException(Exception, "Authentication error")
 
-proc scram_first_message_bare(username: string): string =
-    let rand = random.random(1.0)
-    let nonce = base64.encode(($rand)[2..^1])
-    result = "n=" & username & ",r=" & nonce
-
-proc scram_final_sha256(first_message_bare, responsePayload, password: string): string =
-    proc parsePayload(p: string): Table[string, string] =
-        result = initTable[string, string]()
-        for item in p.split(","):
-            let e = item.find('=')
-            let key = item[0..e - 1]
-            let val = item[e + 1..^1]
-            result[key] = val
-
-    let parsedPayload = parsePayload(responsePayload)
-
-    let iterations = parseInt(parsedPayload["i"])
-    let salt = base64.decode(parsedPayload["s"])
-    let rnonce = parsedPayload["r"]
-
-    let without_proof = "c=biws,r=" & rnonce
-    let saltedPass = pbkdf2_hmac_sha256(32, password, salt, iterations.uint32)
-
-    proc stringWithSHA256Digest(d: SHA256Digest): string =
-        result = newString(d.len)
-        copyMem(addr result[0], unsafeAddr d[0], d.len)
-
-    proc xorBytes(s1, s2: string): string =
-        assert(s1.len == s2.len)
-        result = newString(s1.len)
-        for i in 0 ..< s1.len:
-            result[i] = cast[char](cast[uint8](s1[i]) xor cast[uint8](s2[i]))
-
-    let client_key = stringWithSHA256Digest(hmac_sha256(saltedPass, "Client Key"))
-    let stored_key = stringWithSHA256Digest(computeSHA256(client_key))
-
-    let auth_msg = join([first_message_bare, responsePayload, withoutProof], ",")
-
-    let client_sig = stringWithSHA256Digest(hmac_sha256(stored_key, auth_msg))
-
-    let toEncode = xorBytes(client_key, client_sig)
-
-    let client_proof = "p=" & base64.encode(toEncode)
-    result = join([without_proof, client_proof], ",")
-
 proc authenticate(s: AsyncSocket, username, password: string) {.async.} =
-    let fb = scram_first_message_bare(username)
+    let scramClient = newScramClient[SHA256Digest]()
+    let clientFirstMessage = scramClient.prepareFirstMessage(username)
+
     await s.writeJson(%*{
         "protocol_version": 0,
         "authentication_method": "SCRAM-SHA-256",
-        "authentication": "n,," & fb
+        "authentication": clientFirstMessage
     })
 
     let j = await s.readJson()
     checkSuccess(j)
 
-    let client_final = scram_final_sha256(fb, j["authentication"].str, password)
-
+    let clientFinalMessage = scramClient.prepareFinalMessage(password, j["authentication"].str)
     await s.writeJson(%*{
-        "authentication": client_final
+        "authentication": clientFinalMessage
     })
     checkSuccess(await s.readJson())
 

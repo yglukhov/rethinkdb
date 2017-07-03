@@ -8,5 +8,4 @@ license       = "MIT"
 # Dependencies
 
 requires "nim >= 0.16.0"
-requires "sha1"
-requires "hmac"
+requires "scram"
