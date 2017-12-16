@@ -4,26 +4,38 @@ import rethinkdb
 let c = waitFor newConnection("localhost")
 
 proc setUp() {.async.} =
-    echo "create: ", await c.runQuery(db("test").tableCreate("hello"))
-    echo "drop: ", await c.runQuery(db("test").tableDrop("hello"))
-    echo "create again: ", await c.runQuery(db("test").tableCreate("hello"))
+    var j = await c.runQuery(db("test").tableCreate("hello"))
+    echo "create: ", j
+    j = await c.runQuery(db("test").tableDrop("hello"))
+    echo "drop: ", j
+    j = await c.runQuery(db("test").tableCreate("hello"))
+    echo "create again: ", j
 
-    echo "tableList: ", await c.runQuery(db("test").tableList())
+    j = await c.runQuery(db("test").tableList())
+    echo "tableList: ", j
 
     let t = db("test").table("hello")
-    echo "table: ", await c.runQuery(t)
-    echo "insert: ", await c.runQuery(t.insert(%*[{"qwer": "adf"}, {"qwer1": "asdf1"}]))
-    echo "insert: ", await c.runQuery(t.insert(%*[{"a": 5}, {"a": 10}, {"a": 15}]))
-    echo "table: ", await c.runQuery(t)
+    j = await c.runQuery(t)
+    echo "table: ", j
+    j = await c.runQuery(t.insert(%*[{"qwer": "adf"}, {"qwer1": "asdf1"}]))
+    echo "insert: ", j
+    j = await c.runQuery(t.insert(%*[{"a": 5}, {"a": 10}, {"a": 15}]))
+    echo "insert: ", j
+    j = await c.runQuery(t)
+    echo "table: ", j
 
-    echo "filter: ", await c.runQuery(t.filter(row("qwer") == "adf"))
+    j = await c.runQuery(t.filter(row("qwer") == "adf"))
+    echo "filter: ", j
 
-    echo "delete: ", await c.runQuery(t.filter(row("qwer") == "adf").delete())
-    echo "delete: ", await c.runQuery(t.filter(row("qwer1") == "asdf1").delete())
+    j = await c.runQuery(t.filter(row("qwer") == "adf").delete())
+    echo "delete: ", j
+    j = await c.runQuery(t.filter(row("qwer1") == "asdf1").delete())
+    echo "delete: ", j
 
 
 proc tearDown() {.async.} =
-    echo "drop: ", await c.runQuery(db("test").tableDrop("hello"))
+    var j = await c.runQuery(db("test").tableDrop("hello"))
+    echo "drop: ", j
     await c.close()
 
 proc concurentTest1(seed: int) {.async.} =
